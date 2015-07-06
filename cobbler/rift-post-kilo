@@ -1,0 +1,111 @@
+# Begining of rift-openstack-post
+
+pip install --use-wheel --no-index \
+  --find-links=http://wheel.eng.riftio.com/mirrors/kilo_wheelhouse \
+  -r http://wheel.eng.riftio.com/mirrors/kilo.pip 
+pip install --upgrade pip 
+pip install --upgrade pbr
+rm -f /usr/lib/python2.7/site-packages/six.py*
+yum -y reinstall python-six
+
+yum -y install banner
+
+
+#model=`dmidecode -t system | awk '/Product Name/{print $3}'`
+#wget http://repo.riftio.com:8881/BIOS_settings/${model}.ini -O /var/tmp/bios.ini && #/usr/bin/syscfg/syscfg /r /var/tmp/bios.ini /b  > /var/tmp/apply_bios.log 2>&1
+
+wget http://repo.riftio.com:8881/BIOS_settings/key_bios_settings.sh  -O- | bash >> /var/tmp/set_key_bios_settings.log
+wget http://repo.riftio.com:8881/BIOS_settings/enable_ipmi_alert.sh -O- | bash >> /var/tmp/enable_ipmi_alert.log
+echo "blacklist acpi_pad" >> /etc/modprobe.d/blacklist.conf
+
+
+cat  <<EOF > /var/tmp/kiloinstall_rc.local
+#!/bin/bash
+sleep 20
+cd /var/tmp
+wget http://repo.riftio.com:8881/kilo/kilo-install.sh
+chmod +x *sh
+#./kilo-install.sh $ip_address_eth0 $CONTROLLER  $VLAN
+./kilo-install.sh
+cd /var/tmp/kilo-openstack
+
+if [ $ip_address_eth0 == $CONTROLLER ]; then
+   if [ x"$OAT" == "x" ]; then
+    ./devstack_kilo -h $ip_address_eth0 -v $VLAN -n $BRGIF -k $IP_KEY > /root/kilo-install.log 2>&1 
+   else
+    ./devstack_kilo -h $ip_address_eth0 -v $VLAN -n $BRGIF -k $IP_KEY -a $OAT > /root/kilo-install.log 2>&1 
+   fi
+elif [ "$OVSDPDK" == "Y" ]; then
+    ./devstack_kilo -h $ip_address_eth0 -c $CONTROLLER -v $VLAN -n $BRGIF -k $IP_KEY -d > /root/kilo-install.log 2>&1 
+else
+    ./devstack_kilo -h $ip_address_eth0 -c $CONTROLLER -v $VLAN -n $BRGIF -k $IP_KEY > /root/kilo-install.log 2>&1 
+fi
+
+EOF
+
+chmod +x /var/tmp/kiloinstall_rc.local
+
+wget  http://repo.riftio.com:8881/kilo/TXT/enable_txt -O /var/tmp/enable_txt
+chmod +x /var/tmp/enable_txt
+
+
+#If node is trusted, install tboot
+if [ $TRUSTED == "Y" ]; then
+   cat  <<EOF > /etc/rc.d/rc.local
+#!/bin/bash
+/var/tmp/enable_txt
+EOF
+   yum -y install tboot
+   rm -f /boot/*.bin
+   wget http://repo.riftio.com:8881/kilo/TXT/Xeon_E5_v3_SINITACM_21_PW.bin -O /boot/Xeon_E5_v3_SINITACM_21_PW.bin
+   grub2-mkconfig -o /boot/grub2/grub.cfg
+   grub2-set-default 3-0
+   wget http://repo.riftio.com:8881/kilo/TXT/oat_client_install.sh -O /var/tmp/oat_client_install.sh
+   chmod +x /var/tmp/oat_client_install.sh
+else
+   cat  <<EOF > /etc/rc.d/rc.local
+#!/bin/bash
+/var/tmp/kiloinstall_rc.local
+EOF
+   
+fi
+
+chmod +x /etc/rc.d/rc.local
+# end trusted handling
+
+# QAT driver install
+if [ $QAT == "Y" ]; then
+   yum -y install qat_host
+   /sbin/depmod -a
+fi
+
+#Addition kernel option
+if [ "x$KERNEL_OPT" != "x" ]; then
+  TMP_GRUB=\$(gawk 'match(\$0,/^GRUB_CMDLINE_LINUX="([^"]+)"/,a) {printf("%s\n",a[1])}' /etc/default/grub)
+  sed -i '/^GRUB_CMDLINE_LINUX=/d' /etc/default/grub
+  echo "GRUB_CMDLINE_LINUX=\"\$TMP_GRUB $KERNEL_OPT\"" >> /etc/default/grub
+  grub2-mkconfig -o /boot/grub2/grub.cfg
+fi
+
+#setup hugepage
+echo vm.nr_hugepages=$HUGEPAGE >> /etc/sysctl.conf
+
+/usr/rift/scripts/setup/scripts/setup_grunt_interfaces
+
+# allocate up to 4608 huge pages but not more than 1/4 of all memory
+# this is fixed in prepare host so it will be redundant some day
+
+mem=`awk '/MemFree: / { print $2 }' /proc/meminfo`
+pgsize=`awk '/Hugepagesize: / { print $2 }' /proc/meminfo`
+
+# FYI controller nodes only
+if [ $CONTROLLER == $ip_address_eth0 ]; then
+	/usr/rift/scripts/cloud/prepare_host -m $HUGEPAGE -e eth0 -o br-ex
+else
+	/usr/rift/scripts/cloud/prepare_host -m $HUGEPAGE -e eth0
+fi
+
+sed -i 's/ONBOOT=no/ONBOOT=yes/g' /etc/sysconfig/network-scripts/ifcfg-eth1
+
+# End of rift-openstack-post
+
