@@ -1,0 +1,19 @@
+sessionname tsd
+hardstatus alwayslastline '%{= .} %-Lw%{= .}%> %n%f %t*%{= .}%+Lw%< %-=%{g}(%{d}%H/%l%{g})'
+setenv PROMPT_COMMAND /bin/true
+screen -t hbase bash
+stuff "JAVA_HOME=$(dirname $(dirname $(realpath $(which java)))) /opt/hbase/bin/start-hbase.sh^M"
+
+
+screen -t opentsdb bash
+stuff "sleep 20; /opt/opentsdb/build/tsdb tsd --port=4242 --staticroot=/opt/opentsdb/build/staticroot --cachedir=/tmp --auto-metric^M"
+
+
+screen -t lab_sensor_collector bash
+stuff "sleep 40; /root/lab_temp.sh^M"
+
+screen -t nexus01 bash
+stuff "sleep 40; /root/nexus_snmp.py -c public -v 2 -i nexus3k-01 | nc -w 20 localhost 4242^M"
+
+screen -t nexus02 bash
+stuff "sleep 40; /root/nexus_snmp.py -c public -v 2 -i nexus3k-02 | nc -w 20 localhost 4242^M"
